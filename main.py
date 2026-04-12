@@ -280,15 +280,16 @@ def approve(c):
     
     bot.send_message(
     user_id,
-    f"""🎉 *APPROVED!*
+    f"""🎉 <b>APPROVED!</b>
 
-🔥 *Access Granted Successfully*
+🔥 <b>Access Granted Successfully</b>
 
-👇 *Join Here:*
+👇 <b>Join Here:</b>
 {store["premium_link"]}
 
 ⚠️ Request to join, approval instantly milega."""
 )
+
 
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("reject_"))
