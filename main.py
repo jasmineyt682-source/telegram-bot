@@ -282,7 +282,14 @@ def approve(c):
 
     offer_price.pop(user_id, None)
 
-    bot.send_message(c.message.chat.id, "✅ APPROVED & LINK SENT")
+    caption = c.message.caption or ""
+
+    bot.edit_message_caption(
+    chat_id=c.message.chat.id,
+    message_id=c.message.message_id,
+    caption=caption + "\n\n✅ APPROVED & LINK SENT",
+    reply_markup=None
+)
     
     try:
         bot.send_message(
@@ -305,7 +312,14 @@ def reject(c):
 
     offer_price.pop(user_id, None)
 
-    bot.send_message(c.message.chat.id, "❌ REJECTED")
+    caption = c.message.caption or ""
+
+    bot.edit_message_caption(
+    chat_id=c.message.chat.id,
+    message_id=c.message.message_id,
+    caption=caption + "\n\n❌ PAYMENT REJECTED",
+    reply_markup=None
+)
     bot.send_message(user_id, "❌ Payment rejected")
 
 
