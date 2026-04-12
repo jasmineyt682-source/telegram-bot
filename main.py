@@ -271,6 +271,9 @@ def approve(c):
     user_id = int(c.data.split("_")[1])
     store = get_store()
 
+    # 👇 YE LINE ADD KAR
+    print("PREMIUM LINK:", store["premium_link"])
+
     set_setting("sales", str(int(store["sales"]) + 1))
     set_setting("revenue", str(int(store["revenue"]) + int(store["price"])))
 
@@ -278,17 +281,18 @@ def approve(c):
 
     bot.send_message(c.message.chat.id, "✅ APPROVED & LINK SENT")
     
-    bot.send_message(
-        user_id,
-        f"""🎉 <b>APPROVED!</b>
+    try:
+        bot.send_message(
+            user_id,
+            f"""🎉 <b>APPROVED!</b>
 
 🔥 <b>Access Granted Successfully</b>
 
 👇 <b>Join Here:</b>
-{store["premium_link"]}
-
-⚠️ Request to join, approval instantly milega."""
-    )
+{store["premium_link"]}"""
+        )
+    except Exception as e:
+        print("ERROR SENDING LINK:", e)
 
 
 
