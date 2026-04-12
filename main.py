@@ -279,8 +279,8 @@ def approve(c):
     bot.send_message(c.message.chat.id, "✅ APPROVED & LINK SENT")
     
     bot.send_message(
-    user_id,
-    f"""🎉 <b>APPROVED!</b>
+        user_id,
+        f"""🎉 <b>APPROVED!</b>
 
 🔥 <b>Access Granted Successfully</b>
 
@@ -288,7 +288,7 @@ def approve(c):
 {store["premium_link"]}
 
 ⚠️ Request to join, approval instantly milega."""
-)
+    )
 
 
 
