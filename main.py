@@ -17,6 +17,9 @@ pending_screenshot = {}
 # STORE
 # =========================
 def get_store():
+    old = get_setting("premium", "")
+    if old:
+        set_setting("premium_link", old)
     return {
         "upi": get_setting("upi", ""),
         "demo": get_setting("demo", ""),
