@@ -1,342 +1,336 @@
 import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-import qrcode
-from io import BytesIO
+import threading
+import time   # ✅ FIX ADD
 
 from config import TOKEN, ADMIN_ID
-from db import add_user, set_setting, get_setting, get_all_users
+from db import *
 
-bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
+bot = telebot.TeleBot(TOKEN)
 
-admin_wait = {}
-offer_price = {}
-pending_screenshot = {}
+# ================= STORAGE =================
+temp_access = {}
+sent_videos = {}
+current_folder = {}
 
-
-# =========================
-# STORE
-# =========================
-def get_store():
-    old = get_setting("premium", "")
-    if old:
-        set_setting("premium_link", old)
-    return {
-        "upi": get_setting("upi", ""),
-        "demo": get_setting("demo", ""),
-        "price": get_setting("price", "0"),
-        "name": get_setting("name", ""),
-        "premium_link": get_setting("premium_link", ""),
-        "start_text": get_setting("start_text", ""),
-        "photo": get_setting("photo", None),
-        "sales": int(get_setting("sales", "0")),
-        "revenue": int(get_setting("revenue", "0")),
-    }
+channel_folder = "DEFAULT"
 
 
-# =========================
-# PAYMENT TEXT
-# =========================
-def payment_text(store, price):
-    return f"""
-
-⚡ 𝐏𝐀𝐘𝐌𝐄𝐍𝐓 𝐆𝐀𝐓𝐄𝐖𝐀𝐘
-
-📛 𝐀𝐜𝐜𝐞𝐬𝐬: {store['name'] or "Not Set"}
-💵 𝐀𝐦𝐨𝐮𝐧𝐭: ₹{price}
-🏦 𝐔𝐏𝐈 𝐈𝐃: `{store['upi'] or "Not Set"}`
-
-1️⃣ 𝐒𝐜𝐚𝐧 𝐐𝐑 𝐂𝐨𝐝𝐞
-2️⃣ 𝐏𝐚𝐲 𝐮𝐬𝐢𝐧𝐠 𝐔𝐏𝐈
-3️⃣ 𝐂𝐥𝐢𝐜𝐤 𝐛𝐮𝐭𝐭𝐨𝐧 𝐛𝐞𝐥𝐨𝐰
-
-📸 Send screenshot after payment
-"""
-
-
-# =========================
-# START
-# =========================
-@bot.message_handler(commands=["start"])
-def start(message):
-    store = get_store()
-    add_user(message.chat.id)
-
-    custom = store["start_text"]
-
-    if custom:
-        text = custom
-    else:
-        text = "Welcome!"
-
-    kb = InlineKeyboardMarkup()
-    kb.add(InlineKeyboardButton("💳 BUY PREMIUM", callback_data="buy"))
-    kb.add(InlineKeyboardButton("🎬 DEMO", url=store["demo"]))
-
-    photo = store.get("photo")
-
-    if photo:
+# ================= EXPIRY WORKER (✅ ADD ONLY) =================
+def expiry_worker():
+    while True:
         try:
-            bot.send_photo(message.chat.id, photo, caption=text, reply_markup=kb)
-        except:
-            bot.send_message(message.chat.id, text, reply_markup=kb)
-    else:
-        bot.send_message(message.chat.id, text, reply_markup=kb)
+            now = time.time()
+
+            expired = get_expired(now)
+
+            for item in expired:
+                chat_id = item["chat_id"]
+
+                for mid in item["message_ids"]:
+                    try:
+                        bot.delete_message(chat_id, mid)
+                    except:
+                        pass
+
+                delete_expiry(item["user_id"])
+
+        except Exception as e:
+            print("Expiry error:", e)
+
+        time.sleep(30)
 
 
-# =========================
-# ADMIN PANEL
-# =========================
-@bot.message_handler(commands=["admin"])
-def admin_panel(message):
-    if int(message.chat.id) != int(ADMIN_ID):
+threading.Thread(target=expiry_worker, daemon=True).start()
+
+
+# ================= START =================
+@bot.message_handler(commands=['start'])
+def start(msg):
+
+    text = get_config("start_text") or "👋 Welcome"
+    price = get_config("price") or "29"
+    link = get_config("buy_link") or "https://google.com"
+
+    kb = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add("📥 Download")
+
+    inline = telebot.types.InlineKeyboardMarkup()
+    inline.add(telebot.types.InlineKeyboardButton(f"💰 Buy ₹{price}", url=link))
+    inline.add(telebot.types.InlineKeyboardButton("💳 I Have Paid", callback_data="paid"))
+
+    bot.send_message(msg.chat.id, f"{text}\n💰 Price: ₹{price}", reply_markup=kb)
+    bot.send_message(msg.chat.id, "👇 Buy Premium", reply_markup=inline)
+
+
+# ================= PAID BUTTON =================
+@bot.callback_query_handler(func=lambda call: call.data == "paid")
+def paid_handler(call):
+    try:
+        bot.answer_callback_query(call.id)
+    except:
+        pass
+
+    bot.send_message(call.message.chat.id, "📸 Payment screenshot bhejo")
+
+
+# ================= CHANNEL AUTO SAVE =================
+@bot.channel_post_handler(content_types=['video'])
+def auto_save_channel(msg):
+    add_video(channel_folder, msg.video.file_id)
+    print(f"Saved in folder: {channel_folder}")
+
+
+# ================= ADMIN PANEL (UNCHANGED) =================
+@bot.message_handler(commands=['admin'])
+def admin(msg):
+
+    if msg.from_user.id != ADMIN_ID:
+        bot.send_message(msg.chat.id, "❌ Not allowed")
         return
 
-    kb = InlineKeyboardMarkup(row_width=1)
-    kb.add(InlineKeyboardButton("✏ SET NAME", callback_data="set_name"))
-    kb.add(InlineKeyboardButton("💰 SET PRICE", callback_data="set_price"))
-    kb.add(InlineKeyboardButton("🏦 SET UPI", callback_data="set_upi"))
-    kb.add(InlineKeyboardButton("🎬 SET DEMO", callback_data="set_demo"))
-    kb.add(InlineKeyboardButton("🔗 SET PREMIUM LINK", callback_data="set_premium"))
-    kb.add(InlineKeyboardButton("🖼 SET PHOTO", callback_data="set_photo"))
-    kb.add(InlineKeyboardButton("✏ SET START TEXT", callback_data="set_start_text"))
-    kb.add(InlineKeyboardButton("👥 USERS", callback_data="users"))
-    kb.add(InlineKeyboardButton("📊 STATS", callback_data="stats"))
+    text = (
+        "🛠 ADMIN PANEL\n\n"
+        "⚙️ SETTINGS:\n"
+        "✏️ /setstart TEXT\n"
+        "💰 /setprice PRICE\n"
+        "🔗 /setbuy URL\n\n"
+        "💳 /requests\n\n"
+        "📂 /setfolder NAME\n"
+        "📂 /setchannelfolder NAME\n"
+        "📁 /folders\n"
+        "🗑 /delfolder NAME\n"
+        "❌ /delvideo INDEX\n"
+    )
 
-    bot.send_message(message.chat.id, "👑 *ADMIN PANEL*", reply_markup=kb)
+    bot.send_message(msg.chat.id, text)
 
 
-# =========================
-# ADMIN SET
-# =========================
-@bot.callback_query_handler(func=lambda c: c.data.startswith("set_"))
-def admin_set(c):
-    if int(c.from_user.id) != int(ADMIN_ID):
+# ================= SET CHANNEL FOLDER =================
+@bot.message_handler(commands=['setchannelfolder'])
+def set_channel_folder(msg):
+
+    global channel_folder
+
+    if msg.from_user.id != ADMIN_ID:
         return
 
-    admin_wait[c.from_user.id] = c.data.replace("set_", "")
-    bot.send_message(c.message.chat.id, "✏ Send value now:")
+    name = msg.text.replace("/setchannelfolder", "").strip()
+    channel_folder = name
+    bot.reply_to(msg, f"✅ Channel folder set: {name}")
 
 
-# =========================
-# MESSAGE HANDLER (ADMIN + SCREENSHOT)
-# =========================
-@bot.message_handler(content_types=['text', 'photo'])
-def handle_all(m):
+# ================= SETTINGS =================
+@bot.message_handler(commands=['setstart'])
+def setstart(msg):
+    if msg.from_user.id != ADMIN_ID:
+        return
+    set_config("start_text", msg.text.replace("/setstart ", ""))
 
-    user_id = m.from_user.id
 
-    # ================= ADMIN UPDATE =================
-    if user_id in admin_wait:
-        action = admin_wait[user_id]
+@bot.message_handler(commands=['setprice'])
+def setprice(msg):
+    if msg.from_user.id != ADMIN_ID:
+        return
+    set_config("price", msg.text.split(" ", 1)[1])
 
-        if action == "photo":
-            if m.photo:
-                set_setting("photo", m.photo[-1].file_id)
-                bot.send_message(m.chat.id, "🖼 PHOTO UPDATED")
-            admin_wait.pop(user_id, None)
-            return
 
-        if m.text:
-            set_setting(action, m.text)
-            bot.send_message(m.chat.id, "✅ UPDATED")
+@bot.message_handler(commands=['setbuy'])
+def setbuy(msg):
+    if msg.from_user.id != ADMIN_ID:
+        return
+    set_config("buy_link", msg.text.split(" ", 1)[1])
 
-        admin_wait.pop(user_id, None)
+
+# ================= PAYMENT =================
+@bot.message_handler(content_types=['photo'])
+def ss(msg):
+    add_pending(msg.from_user.id, msg.photo[-1].file_id)
+    bot.send_message(msg.chat.id, "⏳ Wait for approval")
+
+
+@bot.message_handler(commands=['requests'])
+def requests(msg):
+
+    if msg.from_user.id != ADMIN_ID:
         return
 
-    # ================= SCREENSHOT FLOW =================
-    if pending_screenshot.get(user_id):
+    for d in get_pending():
 
-        if not m.photo:
-            bot.send_message(m.chat.id, "📸 Please send a valid screenshot image.")
-            return
+        uid = d["user_id"]
 
-        pending_screenshot.pop(user_id, None)
-        store = get_store()
-
-        kb = InlineKeyboardMarkup()
+        kb = telebot.types.InlineKeyboardMarkup()
         kb.add(
-            InlineKeyboardButton("✅ APPROVE", callback_data=f"approve_{user_id}"),
-            InlineKeyboardButton("❌ REJECT", callback_data=f"reject_{user_id}")
+            telebot.types.InlineKeyboardButton("✅ Approve", callback_data=f"apv_{uid}"),
+            telebot.types.InlineKeyboardButton("❌ Reject", callback_data=f"rej_{uid}")
         )
 
-        bot.send_photo(
-            ADMIN_ID,
-            m.photo[-1].file_id,
-            caption=f"💰 PAYMENT PROOF\nUser: {user_id}",
-            reply_markup=kb
-        )
-
-        bot.send_message(
-            m.chat.id,
-            "✅ Screenshot received!\n⏳ Verification in progress...\n🔗 Access will be sent soon."
-        )
+        bot.send_photo(msg.chat.id, d["file_id"], caption=f"User: {uid}", reply_markup=kb)
 
 
-# =========================
-# BUY
-# =========================
-@bot.callback_query_handler(func=lambda c: c.data == "buy")
-def buy(c):
-    store = get_store()
-
-    price = offer_price.get(c.from_user.id, int(store["price"]))
-
-    qr_link = f"upi://pay?pa={store['upi']}&am={price}&cu=INR"
-
-    qr = qrcode.QRCode()
-    qr.add_data(qr_link)
-    qr.make(fit=True)
-
-    img = qr.make_image(fill="black", back_color="white")
-
-    bio = BytesIO()
-    img.save(bio, "PNG")
-    bio.seek(0)
-
-    kb = InlineKeyboardMarkup()
-    kb.add(InlineKeyboardButton("💳 I HAVE PAID", callback_data="paid"))
-    kb.add(InlineKeyboardButton("❌ CANCEL ORDER", callback_data="cancel"))
-
-    bot.send_photo(c.message.chat.id, bio, caption=payment_text(store, price), reply_markup=kb)
+@bot.callback_query_handler(func=lambda c: c.data.startswith("apv_"))
+def approve(call):
+    uid = int(call.data.split("_")[1])
+    add_premium(uid)
+    remove_pending(uid)
+    bot.send_message(uid, "🎉 Approved!\n📥 Click Download")
 
 
-# =========================
-# PAID BUTTON
-# =========================
-@bot.callback_query_handler(func=lambda c: c.data == "paid")
-def paid(c):
-    pending_screenshot[c.from_user.id] = True
+@bot.callback_query_handler(func=lambda c: c.data.startswith("rej_"))
+def reject(call):
+    uid = int(call.data.split("_")[1])
+    remove_pending(uid)
+    bot.send_message(uid, "❌ Rejected")
 
-    bot.send_message(
-        c.message.chat.id,
-        "📸 Please send your <b>payment screenshot</b> here."
+
+# ================= FOLDER =================
+@bot.message_handler(commands=['setfolder'])
+def setfolder(msg):
+
+    if msg.from_user.id != ADMIN_ID:
+        return
+
+    name = msg.text.replace("/setfolder", "").strip()
+
+    if not name:
+        bot.reply_to(msg, "❌ Use /setfolder NAME")
+        return
+
+    current_folder[msg.from_user.id] = name
+    bot.reply_to(msg, f"📂 Active folder: {name}")
+
+
+@bot.message_handler(commands=['folders'])
+def showfolders(msg):
+
+    data = get_folders()
+
+    text = "📂 Folders:\n\n"
+
+    for f in data:
+        count = len(get_videos(f))
+        text += f"👉 {f} ({count})\n"
+
+    bot.send_message(msg.chat.id, text)
+
+
+# ================= SAVE VIDEO =================
+@bot.message_handler(content_types=['video'])
+def savevideo(msg):
+
+    if msg.from_user.id != ADMIN_ID:
+        return
+
+    if msg.from_user.id not in current_folder:
+        bot.reply_to(msg, "❌ Use /setfolder first")
+        return
+
+    folder = current_folder[msg.from_user.id]
+
+    add_video(folder, msg.video.file_id)
+
+    bot.reply_to(msg, f"✅ Saved in {folder}")
+
+
+# ================= DELETE =================
+@bot.message_handler(commands=['delfolder'])
+def delfolder(msg):
+
+    if msg.from_user.id != ADMIN_ID:
+        return
+
+    name = msg.text.replace("/delfolder", "").strip()
+
+    delete_folder(name)
+
+    bot.reply_to(msg, f"🗑 Deleted {name}")
+
+
+@bot.message_handler(commands=['delvideo'])
+def delvideo(msg):
+
+    if msg.from_user.id != ADMIN_ID:
+        return
+
+    parts = msg.text.split(" ")
+
+    if len(parts) < 2:
+        bot.reply_to(msg, "❌ /delvideo INDEX")
+        return
+
+    index = int(parts[1])
+
+    if msg.from_user.id not in current_folder:
+        bot.reply_to(msg, "❌ Set folder first")
+        return
+
+    folder = current_folder[msg.from_user.id]
+
+    delete_video(folder, index)
+
+    bot.reply_to(msg, "❌ Video deleted")
+
+
+# ================= DOWNLOAD =================
+@bot.message_handler(func=lambda m: m.text == "📥 Download")
+def download(msg):
+
+    if not is_premium(msg.from_user.id):
+        bot.send_message(msg.chat.id, "❌ Premium required")
+        return
+
+    user_id = msg.from_user.id
+
+    temp_access[user_id] = True
+
+    kb = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
+
+    folders = get_folders()
+
+    if not folders:
+        bot.send_message(msg.chat.id, "❌ No folders")
+        return
+
+    for f in folders:
+        kb.add(f"📂 {f}")
+
+    bot.send_message(msg.chat.id, "⏳ Videos ready (auto delete in 15 min)", reply_markup=kb)
+
+
+# ================= OPEN =================
+@bot.message_handler(func=lambda m: m.text.startswith("📂 "))
+def open_folder(msg):
+
+    user_id = msg.from_user.id
+
+    if user_id not in temp_access:
+        bot.send_message(msg.chat.id, "❌ Click Download first")
+        return
+
+    folder = msg.text.replace("📂 ", "").strip()
+
+    vids = get_videos(folder)
+
+    if not vids:
+        bot.send_message(msg.chat.id, "❌ No videos")
+        return
+
+    sent_videos[user_id] = []
+
+    for v in vids:
+        m = bot.send_video(msg.chat.id, v["file_id"], protect_content=True)
+
+        # ❗ FIX ONLY (store message_id only)
+        sent_videos[user_id].append(m.message_id)
+
+    # ✅ DB EXPIRY SAVE ADD
+    set_expiry(
+        user_id,
+        sent_videos[user_id],
+        msg.chat.id,
+        time.time() + 900
     )
 
 
-# =========================
-# CANCEL
-# =========================
-@bot.callback_query_handler(func=lambda c: c.data == "cancel")
-def cancel(c):
-    store = get_store()
-
-    old_price = int(store["price"])
-    new_price = max(1, old_price - 2)
-
-    offer_price[c.from_user.id] = new_price
-
-    qr_link = f"upi://pay?pa={store['upi']}&am={new_price}&cu=INR"
-
-    qr = qrcode.QRCode()
-    qr.add_data(qr_link)
-    qr.make(fit=True)
-
-    img = qr.make_image(fill="black", back_color="white")
-
-    bio = BytesIO()
-    img.save(bio, "PNG")
-    bio.seek(0)
-
-    # 🔥 PRO HIGH-CONVERTING TEXT
-    text = f"""
-    ❌ <b>ORDER CANCELLED</b>
-
-    😔 Miss ho gaya...
-
-    🔥 <b>EXCLUSIVE DEAL UNLOCKED</b>
-
-     ━━━━━━━━━━━━━━━
-    💰 <s>₹{old_price}</s> ❌
-    🎉 <b>Now Only:</b> ₹{new_price} ✅
-     ━━━━━━━━━━━━━━━
-
-    ⏳ <b>Only few users can grab this deal</b>
-    ⚡ <b>Instant Access</b>
-    🔐 <b>Private Premium Content</b>
-
-    🚨 <b>Hurry! Offer may expire anytime</b>
-
-    👇 <b>Tap below to grab now</b>
-"""
-
-    # 🔥 PRO BUTTON
-    kb = InlineKeyboardMarkup()
-    kb.add(InlineKeyboardButton("🔥 LIMITED OFFER - GRAB NOW", callback_data="buy"))
-
-    bot.send_photo(c.message.chat.id, bio, caption=text, reply_markup=kb)
-
-
-# =========================
-# APPROVE / REJECT (FIXED)
-# =========================
-@bot.callback_query_handler(func=lambda c: c.data.startswith("approve_"))
-def approve(c):
-    user_id = int(c.data.split("_")[1])
-    store = get_store()
-
-    # 👇 YE LINE ADD KAR
-    print("PREMIUM LINK:", store["premium_link"])
-
-    set_setting("sales", str(int(store["sales"]) + 1))
-    set_setting("revenue", str(int(store["revenue"]) + int(store["price"])))
-
-    offer_price.pop(user_id, None)
-
-    caption = c.message.caption or ""
-
-    bot.edit_message_caption(
-    chat_id=c.message.chat.id,
-    message_id=c.message.message_id,
-    caption=caption + "\n\n✅ APPROVED & LINK SENT",
-    reply_markup=None
-)
-    
-    try:
-        bot.send_message(
-            user_id,
-            f"""🎉 <b>APPROVED!</b>
-
-🔥 <b>Access Granted Successfully</b>
-
-👇 <b>Join Here:</b>
-{store["premium_link"]}"""
-        )
-    except Exception as e:
-        print("ERROR SENDING LINK:", e)
-
-
-
-@bot.callback_query_handler(func=lambda c: c.data.startswith("reject_"))
-def reject(c):
-    user_id = int(c.data.split("_")[1])
-
-    offer_price.pop(user_id, None)
-
-    caption = c.message.caption or ""
-
-    bot.edit_message_caption(
-    chat_id=c.message.chat.id,
-    message_id=c.message.message_id,
-    caption=caption + "\n\n❌ PAYMENT REJECTED",
-    reply_markup=None
-)
-    bot.send_message(user_id, "❌ Payment rejected")
-
-
-# =========================
-# USERS / STATS
-# =========================
-@bot.callback_query_handler(func=lambda c: c.data == "users")
-def users(c):
-    users = get_all_users()
-    bot.send_message(c.message.chat.id, f"👥 USERS: {len(users)}")
-
-
-@bot.callback_query_handler(func=lambda c: c.data == "stats")
-def stats(c):
-    store = get_store()
-    bot.send_message(c.message.chat.id, f"📊 SALES: {store['sales']}\n💰 REVENUE: ₹{store['revenue']}")
-
-
+# ================= RUN =================
 print("Bot Running...")
 bot.infinity_polling(skip_pending=True)
