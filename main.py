@@ -32,7 +32,8 @@ def expiry_worker():
                     except:
                         pass
 
-                delete_expiry(item["user_id"])
+                delete_expiry(item["_id"])
+
 
         except Exception as e:
             print("Expiry error:", e)
